@@ -1,0 +1,55 @@
+#!/bin/bash
+set -uo pipefail
+trap 's=$?; echo "$0: Error on line "$LINENO": $BASH_COMMAND"; exit $s' ERR
+IFS=$'\n\t'
+
+# Source for this script:
+# https://github.com/kr15h/travis-raspbian-image
+# https://disconnected.systems/blog/custom-rpi-image-with-github-travis/
+
+GPU_MEM=16
+LC_ALL=C
+
+# Replace /boot/cmdline.txt since it contains root device mapping to a PARTUUID that 
+# changed during parted resize.
+echo "Replace /boot/cmdline.txt"
+echo "dwc_otg.lpm_enable=0 console=serial0,115200 console=tty1 root=/dev/mmcblk0p2 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait quiet init=/usr/lib/raspi-config/init_resize.sh" > "/boot/cmdline.txt"
+cat "/boot/cmdline.txt"
+
+# Resize partition on first boot.
+# https://www.raspberrypi.org/forums/viewtopic.php?p=1503766#p1503766
+wget -O /etc/init.d/resize2fs_once https://raw.githubusercontent.com/RPi-Distro/pi-gen/master/stage2/01-sys-tweaks/files/resize2fs_once
+chmod +x /etc/init.d/resize2fs_once
+systemctl enable resize2fs_once
+
+# Replace /etc/fstab since the non existing PARTUUID has to be changed here as well.
+echo "Replace /etc/fstab"
+echo "proc            /proc           proc    defaults          0       0" > "/etc/fstab"
+echo "/dev/mmcblk0p1  /boot           vfat    defaults          0       2" >> "/etc/fstab"
+echo "/dev/mmcblk0p2  /               ext4    defaults,noatime  0       1" >> "/etc/fstab"
+cat "/etc/fstab"
+
+echo "Setting gpu_mem."
+if grep -q "gpu_mem" /boot/config.txt
+then
+    sed -i "s/gpu_mem.*/gpu_mem=${GPU_MEM}/" /boot/config.txt
+else
+    echo "gpu_mem=${GPU_MEM}" >> /boot/config.txt
+fi
+cat /boot/config.txt | grep "gpu_mem"
+
+echo "Setting hostname."
+sed -i "s/raspberrypi/pi-zero-w/" /etc/hostname
+sed -i "s/raspberrypi/pi-zero-w/" /etc/hosts
+
+echo "Setting timezone."
+echo "Europe/Berlin" > /etc/timezone
+ln -fs /usr/share/zoneinfo/Europe/Berlin /etc/localtime
+
+echo "Installing raspberrypi-kernel-headers"
+sudo apt-get install --no-install-recommends raspberrypi-kernel-headers
+
+echo "Installing required packages"
+sudo apt update -y
+sudo apt dist-upgrade -y
+sudo apt-get install --no-install-recommends -y git python3 python3-venv python3-dev
